@@ -1,79 +1,107 @@
 import telebot
 import os
 import yt_dlp
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# التوكن الجديد لبوت SBNAPTUBE_bot
+# التوكن من إعدادات ريل واي
 TOKEN = os.getenv('BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN)
 
 # معرفك كأدمن
 ADMIN_ID = 5307344707 
-USERS_FILE = "users.txt"
 
-def save_user(user_id):
-    if not os.path.exists(USERS_FILE):
-        open(USERS_FILE, 'w').close()
-    with open(USERS_FILE, 'r') as f:
-        users = f.read().splitlines()
-    if str(user_id) not in users:
-        with open(USERS_FILE, 'a') as f:
-            f.write(f"{user_id}\n")
+# ملفات التخزين
+USERS_FILE = "users.txt"
+RATINGS_FILE = "ratings.txt"
+
+def save_data(file, data):
+    if not os.path.exists(file):
+        open(file, 'w').close()
+    with open(file, 'a') as f:
+        f.write(f"{data}\n")
+
+def get_total_count(file):
+    if not os.path.exists(file): return 0
+    with open(file, 'r') as f:
+        return len(set(f.read().splitlines()))
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    save_user(message.from_user.id)
-    user_name = message.from_user.first_name
-    welcome_text = (
-        f"👋 أهلاً بك يا {user_name} في بوت سناب تيوب!\n\n"
-        "📥 أرسل لي رابط الفيديو (يوتيوب حالياً) وسأرسله لك كملف صوتي MP3 فوراً.\n"
-        "🚀 الخدمة سريعة ومجانية بالكامل!"
-    )
-    bot.reply_to(message, welcome_text)
+    save_data(USERS_FILE, message.from_user.id)
+    bot.reply_to(message, f"👋 أهلاً بك يا {message.from_user.first_name} في بوت سناب تيوب!\n\n📥 أرسل رابط الفيديو للتحميل فوراً.")
 
-@bot.message_handler(commands=['stats'])
-def show_stats(message):
+# لوحة التحكم المطورة للأدمن
+@bot.message_handler(commands=['admin'])
+def show_admin_panel(message):
     if message.from_user.id == ADMIN_ID:
-        if os.path.exists(USERS_FILE):
-            with open(USERS_FILE, 'r') as f:
-                total = len(f.read().splitlines())
-            bot.reply_to(message, f"📊 عدد مستخدمي البوت حالياً: {total}")
+        total_users = get_total_count(USERS_FILE)
+        
+        # قراءة التقييمات
+        last_ratings = "لا يوجد تقييمات بعد."
+        if os.path.exists(RATINGS_FILE):
+            with open(RATINGS_FILE, 'r') as f:
+                lines = f.read().splitlines()
+                total_r = len(lines)
+                # عرض آخر 5 تقييمات فقط عشان الرسالة ما تكون طويلة
+                last_ratings = "\n".join(lines[-5:]) if lines else "لا يوجد"
+        else:
+            total_r = 0
+
+        admin_msg = (
+            "📊 **لوحة تحكم الإدارة**\n\n"
+            f"👥 عدد المستخدمين: {total_users}\n"
+            f"⭐ إجمالي التقييمات: {total_r}\n\n"
+            f"📜 **آخر 5 تقييمات وصلتك:**\n{last_ratings}"
+        )
+        bot.reply_to(message, admin_msg, parse_mode="Markdown")
     else:
         bot.reply_to(message, "⚠️ مخصص للمطور فقط.")
 
-@bot.message_handler(func=lambda message: True)
+@bot.message_handler(func=lambda message: message.text.startswith("http"))
 def handle_download(message):
     url = message.text
-    if "youtube.com" in url or "youtu.be" in url:
-        save_user(message.from_user.id)
-        msg = bot.reply_to(message, "⏳ جاري التحميل والمعالجة... انتظر لحظة")
+    msg = bot.reply_to(message, "⏳ جاري التحميل... انتظر لحظة")
+    
+    try:
+        ydl_opts = {
+            'format': 'best',
+            'outtmpl': f'video_{message.chat.id}.mp4',
+            'noplaylist': True,
+        }
         
-        try:
-            # إعدادات التحميل لتحويله لـ MP3
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'outtmpl': 'song.%(ext)s',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
-            }
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-            
-            # إرسال الملف
-            with open('song.mp3', 'rb') as audio:
-                bot.send_audio(message.chat.id, audio, caption="🎵 تم التحميل بواسطة سناب تيوب")
-            
-            # تنظيف السيرفر
-            os.remove('song.mp3')
-            bot.delete_message(message.chat.id, msg.message_id)
-            
-        except Exception as e:
-            bot.edit_message_text(f"❌ فشل التحميل. تأكد من الرابط وحاول مجدداً.", message.chat.id, msg.message_id)
-    else:
-        bot.reply_to(message, "⚠️ من فضلك أرسل رابط يوتيوب صحيح.")
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        
+        with open(f'video_{message.chat.id}.mp4', 'rb') as video:
+            bot.send_video(message.chat.id, video, caption="✅ تم التحميل بواسطة سناب تيوب")
+        
+        os.remove(f'video_{message.chat.id}.mp4')
+        bot.delete_message(message.chat.id, msg.message_id)
+        
+        # إظهار أزرار التقييم
+        show_rating_keyboard(message.chat.id)
+        
+    except Exception:
+        bot.edit_message_text("❌ فشل التحميل. تأكد من الرابط.", message.chat.id, msg.message_id)
+
+def show_rating_keyboard(chat_id):
+    markup = InlineKeyboardMarkup()
+    stars = [InlineKeyboardButton("⭐", callback_data="r_1"),
+             InlineKeyboardButton("⭐⭐", callback_data="r_2"),
+             InlineKeyboardButton("⭐⭐⭐", callback_data="r_3"),
+             InlineKeyboardButton("⭐⭐⭐⭐", callback_data="r_4"),
+             InlineKeyboardButton("⭐⭐⭐⭐⭐", callback_data="r_5")]
+    markup.add(stars[0], stars[1], stars[2])
+    markup.add(stars[3], stars[4])
+    bot.send_message(chat_id, "🙏 ما هو تقييمك للخدمة؟", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("r_"))
+def handle_rating(call):
+    rating_val = call.data.split("_")[1]
+    user_info = f"👤 {call.from_user.first_name}: {rating_val} نجوم"
+    save_data(RATINGS_FILE, user_info)
+    bot.answer_callback_query(call.id, "شكراً لتقييمك! ❤️")
+    bot.edit_message_text(f"✅ تم تسجيل تقييمك ({rating_val} نجوم).", call.message.chat.id, call.message.message_id)
 
 if __name__ == "__main__":
     bot.infinity_polling()
